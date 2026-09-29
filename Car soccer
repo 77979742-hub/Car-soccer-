@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Car Soccer 3D</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background-color: #000;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      user-select: none;
+    }
+    #ui {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 30px;
+      background: rgba(0, 0, 0, 0.65);
+      padding: 12px 30px;
+      border-radius: 30px;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+      color: #fff;
+      font-size: 28px;
+      font-weight: 800;
+      z-index: 10;
+    }
+    .score-blue { color: #3498db; text-shadow: 0 0 10px rgba(52, 152, 219, 0.8); }
+    .score-red { color: #e74c3c; text-shadow: 0 0 10px rgba(231, 76, 60, 0.8); }
+    
+    #nitro-container {
+      position: absolute;
+      bottom: 30px;
+      right: 30px;
+      width: 200px;
+      background: rgba(0, 0, 0, 0.6);
+      border: 2px solid #fff;
+      border-radius: 10px;
+      padding: 5px;
+      z-index: 10;
+    }
+    #nitro-bar {
+      height: 18px;
+      width: 100%;
+      background: linear-gradient(90deg, #f1c40f, #e67e22);
+      border-radius: 6px;
+      transition: width 0.1s ease-out;
+    }
+    #nitro-label {
+      position: absolute;
+      top: -24px;
+      right: 0;
+      color: #fff;
+      font-size: 14px;
+      font-weight: bold;
+    }
+
+    #goal-banner {
+      position: absolute;
+      top: 40%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(0);
+      font-size: 72px;
+      font-weight: 900;
+      color: #f1c40f;
+      text-shadow: 0 0 20px #000, 0 0 40px #f1c40f;
+      transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      pointer-events: none;
+      z-index: 20;
+    }
+    #goal-banner.show {
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    #controls-hint {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 14px;
+      background: rgba(0, 0, 0, 0.5);
+      padding: 8px 15px;
+      border-radius: 8px;
+      z-index: 10;
+    }
+  </style>
+
+  <!-- Importación de Three.js desde CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+  <div id="ui">
+    <span class="score-blue">AZUL: <span id="pScore">0</span></span>
+    <span style="opacity: 0.5;">-</span>
+    <span class="score-red">ROJO: <span id="aiScore">0</span></span>
+  </div>
+
+  <div id="nitro-container">
+    <div id="nitro-label">NITRO (ESPACIO / SHIFT)</div>
+    <div id="nitro-bar"></div>
+  </div>
+
+  <div id="goal-banner">¡GOOOOOOL!</div>
+
+  <div id="controls-hint">
+    🎮 <b>Controles:</b> W/A/S/D o Flechas = Conducir | <b>Espacio / Shift</b> = Nitro
+  </div>
+
+<script>
+// --- CONFIGURACIÓN DE LA ESCENA 3D ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111625);
+scene.fog = new THREE.FogExp2(0x111625, 0.003);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+// --- ILUMINACIÓN ---
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(ambientLight);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(40, 80, 20);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.width = 2048;
+dirLight.shadow.mapSize.height = 2048;
+dirLight.shadow.camera.near = 10;
+dirLight.shadow.camera.far = 200;
+dirLight.shadow.camera.left = -60;
+dirLight.shadow.camera.right = 60;
+dirLight.shadow.camera.top = 100;
+dirLight.shadow.camera.bottom = -100;
+scene.add(dirLight);
+
+// --- DIMENSIONES DEL CAMPO ---
+const FIELD_WIDTH = 80;
+const FIELD_LENGTH = 140;
+const GOAL_WIDTH = 28;
+const GOAL_HEIGHT = 10;
+
+// Marcador
+let playerScore = 0;
+let aiScore = 0;
+const pScoreEl = document.getElementById('pScore');
+const aiScoreEl = document.getElementById('aiScore');
+const goalBanner = document.getElementById('goal-banner');
+const nitroBar = document.getElementById('nitro-bar');
+
+// --- CONSTRUCCIÓN DEL CAMPO / ESTADIO ---
+// Suelo Verde
+const pitchGeo = new THREE.PlaneGeometry(FIELD_WIDTH, FIELD_LENGTH);
+const pitchMat = new THREE.MeshStandardMaterial({ color: 0x27ae60, roughness: 0.6 });
+const pitch = new THREE.Mesh(pitchGeo, pitchMat);
+pitch.rotation.x = -Math.PI / 2;
+pitch.receiveShadow = true;
+scene.add(pitch);
+
+// Paredes Transparentes del Estadio
+const wallMat = new THREE.MeshStandardMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0.15,
+  side: THREE.DoubleSide
+});
+
+function createWall(w, h, d, x, y, z) {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  const mesh = new THREE.Mesh(geo, wallMat);
+  mesh.position.set(x, y, z);
+  scene.add(mesh);
+}
+
+// Paredes laterales
+createWall(2, 20, FIELD_LENGTH, -FIELD_WIDTH / 2 - 1, 10, 0);
+createWall(2, 20, FIELD_LENGTH, FIELD_WIDTH / 2 + 1, 10, 0);
+
+// Porterías (Líneas y Estructura)
+function createGoal(zPos, colorHex) {
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: colorHex });
+  
+  // Postes laterales
+  const postGeo = new THREE.CylinderGeometry(0.5, 0.5, GOAL_HEIGHT);
+  const p1 = new THREE.Mesh(postGeo, mat);
+  p1.position.set(-GOAL_WIDTH / 2, GOAL_HEIGHT / 2, 0);
+  const p2 = new THREE.Mesh(postGeo, mat);
+  p2.position.set(GOAL_WIDTH / 2, GOAL_HEIGHT / 2, 0);
+
+  // Travesaño
+  const crossGeo = new THREE.CylinderGeometry(0.5, 0.5, GOAL_WIDTH);
+  const cross = new THREE.Mesh(crossGeo, mat);
+  cross.rotation.z = Math.PI / 2;
+  cross.position.set(0, GOAL_HEIGHT, 0);
+
+  group.add(p1, p2, cross);
+  group.position.set(0, 0, zPos);
+  scene.add(group);
+}
+
+createGoal(-FIELD_LENGTH / 2, 0x3498db); // Azul
+createGoal(FIELD_LENGTH / 2, 0xe74c3c);  // Rojo
+
+// --- CREADOR DE AUTOS ---
+function createCarMesh(colorHex) {
+  const group = new THREE.Group();
+
+  // Carrocería
+  const bodyGeo = new THREE.BoxGeometry(3.6, 1.2, 5.5);
+  const bodyMat = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.3, metalness: 0.4 });
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.position.y = 1.2;
+  body.castShadow = true;
+  group.add(body);
+
+  // Cabina
+  const cabinGeo = new THREE.BoxGeometry(2.8, 0.9, 2.8);
+  const cabinMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.1 });
+  const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+  cabin.position.set(0, 2.0, -0.4);
+  group.add(cabin);
+
+  // Ruedas
+  const wheelGeo = new THREE.CylinderGeometry(0.7, 0.7, 0.6, 16);
+  wheelGeo.rotateZ(Math.PI / 2);
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
+
+  const wheelPositions = [
+    [-1.9, 0.7, 1.8], [1.9, 0.7, 1.8],
+    [-1.9, 0.7, -1.8], [1.9, 0.7, -1.8]
+  ];
+
+  wheelPositions.forEach(pos => {
+    const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+    wheel.position.set(...pos);
+    wheel.castShadow = true;
+    group.add(wheel);
+  });
+
+  return group;
+}
+
+// --- CLASE VEHÍCULO ---
+class Car {
+  constructor(isAI, color, startZ, startAngle) {
+    this.mesh = createCarMesh(color);
+    scene.add(this.mesh);
+    this.isAI = isAI;
+    this.startZ = startZ;
+    this.startAngle = startAngle;
+    this.radius = 3.0;
+    this.reset();
+  }
+
+  reset() {
+    this.pos = new THREE.Vector3(0, 0, this.startZ);
+    this.angle = this.startAngle;
+    this.speed = 0;
+    this.maxSpeed = 0.85;
+    this.accel = 0.025;
+    this.boost = 100;
+    this.vel = new THREE.Vector3();
+    this.mesh.position.copy(this.pos);
+    this.mesh.rotation.y = this.angle;
+  }
+
+  update(keys, ballPos) {
+    let pushing = false;
+    let turning = 0;
+    let boosting = false;
+
+    if (!this.isAI) {
+      if (keys['KeyW'] || keys['ArrowUp']) pushing = true;
+      if (keys['KeyS'] || keys['ArrowDown']) this.speed -= this.accel * 0.6;
+      if (keys['KeyA'] || keys['ArrowLeft']) turning = 1;
+      if (keys['KeyD'] || keys['ArrowRight']) turning = -1;
+      if ((keys['Space'] || keys['ShiftLeft']) && this.boost > 0) boosting = true;
+    } else {
+      // Inteligencia Artificial
+      let targetX = ballPos.x;
+      let targetZ = ballPos.z;
+
+      let dx = targetX - this.pos.x;
+      let dz = targetZ - this.pos.z;
+      let targetAngle = Math.atan2(dx, dz);
+
+      let angleDiff = targetAngle - this.angle;
+      while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+      while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+
+      if (angleDiff > 0.15) turning = 1;
+      else if (angleDiff < -0.15) turning = -1;
+
+      pushing = true;
+      if (Math.abs(angleDiff) < 0.3 && this.pos.distanceTo(ballPos) > 15 && this.boost > 10) {
+        boosting = true;
+      }
+    }
+
+    // Aceleración y Nitro
+    let currentMax = this.maxSpeed;
+    if (boosting && this.boost > 0) {
+      currentMax *= 1.55;
+      this.speed += this.accel * 1.4;
+      this.boost -= 0.7;
+    } else if (this.boost < 100) {
+      this.boost += 0.15;
+    }
+
+    if (!this.isAI) {
+      nitroBar.style.width = `${this.boost}%`;
+    }
+
+    if (pushing) this.speed += this.accel;
+    this.speed *= 0.95; // Fricción
+
+    if (this.speed > currentMax) this.speed = currentMax;
+    if (this.speed < -currentMax / 2) this.speed = -currentMax / 2;
+
+    this.angle += turning * 0.045 * (Math.abs(this.speed) / currentMax + 0.2);
+
+    this.vel.set(Math.sin(this.angle) * this.speed, 0, Math.cos(this.angle) * this.speed);
+    this.pos.add(this.vel);
+
+    // Limites del campo
+    const marginX = FIELD_WIDTH / 2 - 2.5;
+    const marginZ = FIELD_LENGTH / 2 - 3.0;
+
+    this.pos.x = Math.max(-marginX, Math.min(marginX, this.pos.x));
+    this.pos.z = Math.max(-marginZ, Math.min(marginZ, this.pos.z));
+
+    this.mesh.position.copy(this.pos);
+    this.mesh.rotation.y = this.angle;
+  }
+}
+
+// --- CLASE BALÓN ---
+class Ball {
+  constructor() {
+    this.radius = 2.4;
+    const geo = new THREE.SphereGeometry(this.radius, 32, 32);
+    
+    // Textura simple estilo balón
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.3,
+      metalness: 0.1
+    });
+
+    this.mesh = new THREE.Mesh(geo, mat);
+    this.mesh.castShadow = true;
+    scene.add(this.mesh);
+
+    this.pos = new THREE.Vector3();
+    this.vel = new THREE.Vector3();
+    this.reset();
+  }
+
+  reset() {
+    this.pos.set(0, this.radius, 0);
+    this.vel.set(0, 0, 0);
+    this.mesh.position.copy(this.pos);
+  }
+
+  update() {
+    // Gravedad
+    this.vel.y -= 0.015;
+
+    this.pos.add(this.vel);
+    this.vel.x *= 0.985;
+    this.vel.z *= 0.985;
+
+    // Rebote Suelo
+    if (this.pos.y < this.radius) {
+      this.pos.y = this.radius;
+      this.vel.y *= -0.65;
+    }
+
+    // Rebote Paredes Laterales
+    const boundX = FIELD_WIDTH / 2 - this.radius;
+    if (Math.abs(this.pos.x) > boundX) {
+      this.pos.x = Math.sign(this.pos.x) * boundX;
+      this.vel.x *= -0.8;
+    }
+
+    // Paredes de Fondo (excepto zona de gol)
+    const boundZ = FIELD_LENGTH / 2 - this.radius;
+    const inGoalArea = Math.abs(this.pos.x) < (GOAL_WIDTH / 2 - this.radius) && this.pos.y < GOAL_HEIGHT;
+
+    if (!inGoalArea && Math.abs(this.pos.z) > boundZ) {
+      this.pos.z = Math.sign(this.pos.z) * boundZ;
+      this.vel.z *= -0.8;
+    }
+
+    this.mesh.position.copy(this.pos);
+
+    // Rotación del balón al rodar
+    this.mesh.rotation.x += this.vel.z * 0.2;
+    this.mesh.rotation.z -= this.vel.x * 0.2;
+  }
+}
+
+// --- INSTANCIAS DEL JUEGO ---
+const player = new Car(false, 0x3498db, FIELD_LENGTH / 2 - 25, Math.PI); // Jugador Azul
+const ai = new Car(true, 0xe74c3c, -FIELD_LENGTH / 2 + 25, 0);            // IA Roja
+const ball = new Ball();
+
+// --- CONTROLES TECLADO ---
+const keys = {};
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+// --- COLISIONES (AUTOS <-> BALÓN) ---
+function handleCollisions(car, ball) {
+  let dx = ball.pos.x - car.pos.x;
+  let dz = ball.pos.z - car.pos.z;
+  let dist = Math.hypot(dx, dz);
+  let minDist = car.radius + ball.radius;
+
+  if (dist < minDist) {
+    let nx = dx / dist;
+    let nz = dz / dist;
+    let overlap = minDist - dist;
+
+    // Separar balón
+    ball.pos.x += nx * overlap;
+    ball.pos.z += nz * overlap;
+
+    // Transferencia de energía e impulso
+    let hitSpeed = car.speed * 1.8 + 0.4;
+    ball.vel.x = nx * hitSpeed;
+    ball.vel.z = nz * hitSpeed;
+    ball.vel.y = Math.min(0.6, Math.abs(car.speed) * 0.7 + 0.15); // Eleva levemente el balón
+  }
+}
+
+// --- REVISIÓN DE GOLES ---
+let isGoalScored = false;
+
+function checkGoal() {
+  if (isGoalScored) return;
+
+  if (ball.pos.z > FIELD_LENGTH / 2 + ball.radius) {
+    // Gol de la IA
+    aiScore++;
+    aiScoreEl.textContent = aiScore;
+    triggerGoal("¡GOL DE LA IA!");
+  } else if (ball.pos.z < -FIELD_LENGTH / 2 - ball.radius) {
+    // Gol del Jugador
+    playerScore++;
+    pScoreEl.textContent = playerScore;
+    triggerGoal("¡GOOOOOOL!");
+  }
+}
+
+function triggerGoal(text) {
+  isGoalScored = true;
+  goalBanner.textContent = text;
+  goalBanner.classList.add('show');
+
+  setTimeout(() => {
+    goalBanner.classList.remove('show');
+    player.reset();
+    ai.reset();
+    ball.reset();
+    isGoalScored = false;
+  }, 2000);
+}
+
+// --- CÁMARA SEGUIDORA (TERCERA PERSONA) ---
+function updateCamera() {
+  const targetCamPos = new THREE.Vector3(
+    player.pos.x - Math.sin(player.angle) * 22,
+    player.pos.y + 11,
+    player.pos.z - Math.cos(player.angle) * 22
+  );
+
+  camera.position.lerp(targetCamPos, 0.1);
+  camera.lookAt(player.pos.x, player.pos.y + 2, player.pos.z);
+}
+
+// --- CICLO PRINCIPAL (GAME LOOP) ---
+function animate() {
+  requestAnimationFrame(animate);
+
+  if (!isGoalScored) {
+    player.update(keys, ball.pos);
+    ai.update(keys, ball.pos);
+    ball.update();
+
+    handleCollisions(player, ball);
+    handleCollisions(ai, ball);
+
+    checkGoal();
+  }
+
+  updateCamera();
+  renderer.render(scene, camera);
+}
+
+// Redimensionar pantalla
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+animate();
+</script>
+</body>
+</html>
